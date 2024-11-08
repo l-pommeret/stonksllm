@@ -4,9 +4,9 @@ from typing import List, Tuple, Union
 class PriceChangeTokenizer:
     def __init__(
         self,
-        bucket_size: float = 0.05,
-        min_pct: float = -5.0,
-        max_pct: float = 5.0
+        bucket_size: float = 0.01,
+        min_pct: float = -1.0,
+        max_pct: float = 1.0
     ):
         """
         Initialise le tokenizer avec des buckets de taille fixe
