@@ -36,7 +36,7 @@ async def collect_data_timed(duration_minutes=10):
         
         while time.time() < end_time:
             try:
-                ticker = await exchange.fetch_ticker('BTC/USDT')
+                ticker = await exchange.fetch_ticker('DOGE/USDT')
                 current_time = time.time()
                 price = ticker['last']
                 
@@ -113,4 +113,4 @@ async def collect_data_timed(duration_minutes=10):
 
 if __name__ == "__main__":
     loop = asyncio.get_event_loop()
-    data = loop.run_until_complete(collect_data_timed(1))
+    data = loop.run_until_complete(collect_data_timed(120))
