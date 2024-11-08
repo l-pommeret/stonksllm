@@ -5,6 +5,9 @@ import torch
 import numpy as np
 from datetime import datetime
 
+from dataset import tokenizer
+from transformer import FastTokenTransformer, TradingPredictor
+
 # Chargement du modèle
 device = "cuda" if torch.cuda.is_available() else "cpu"
 model = FastTokenTransformer().to(device)

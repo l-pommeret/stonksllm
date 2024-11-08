@@ -4,6 +4,8 @@ import torch.nn.functional as F
 import numpy as np
 from torch.utils.data import Dataset, DataLoader
 
+from dataset import tokenizer
+
 class FastTokenTransformer(nn.Module):
     def __init__(
         self,
