@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 from torch.utils.data import Dataset, DataLoader
+from sklearn.model_selection import train_test_split
 
 from dataset import tokenizer
 
@@ -71,10 +72,36 @@ class PriceDataset(Dataset):
         y = self.data[idx + self.context_length]
         return x, y
 
-def train_model(tokens, context_length=64, batch_size=64, n_epochs=50, device="cpu"):
+def evaluate_model(model, dataloader, device):
+    """Évalue le modèle sur un jeu de données"""
+    model.eval()
+    total_loss = 0
+    correct_predictions = 0
+    total_predictions = 0
+    
+    with torch.no_grad():
+        for batch_x, batch_y in dataloader:
+            batch_x, batch_y = batch_x.to(device), batch_y.to(device)
+            y_pred = model(batch_x)
+            loss = F.cross_entropy(y_pred, batch_y)
+            total_loss += loss.item()
+            
+            # Calcul de l'exactitude
+            pred_tokens = torch.argmax(y_pred, dim=1)
+            correct_predictions += (pred_tokens == batch_y).sum().item()
+            total_predictions += batch_y.size(0)
+    
+    avg_loss = total_loss / len(dataloader)
+    accuracy = correct_predictions / total_predictions
+    return avg_loss, accuracy
+
+def train_model(train_tokens, test_tokens, context_length=64, batch_size=64, n_epochs=50, device="cpu"):
     # Préparation des données
-    dataset = PriceDataset(tokens, context_length)
-    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
+    train_dataset = PriceDataset(train_tokens, context_length)
+    test_dataset = PriceDataset(test_tokens, context_length)
+    
+    train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+    test_dataloader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
     
     # Modèle
     model = FastTokenTransformer(context_length=context_length).to(device)
@@ -83,11 +110,14 @@ def train_model(tokens, context_length=64, batch_size=64, n_epochs=50, device="c
     
     # Entraînement
     best_loss = float('inf')
+    best_test_accuracy = 0
+    
     for epoch in range(n_epochs):
+        # Mode entraînement
         model.train()
         total_loss = 0
         
-        for batch_x, batch_y in dataloader:
+        for batch_x, batch_y in train_dataloader:
             batch_x, batch_y = batch_x.to(device), batch_y.to(device)
             
             optimizer.zero_grad()
@@ -98,15 +128,31 @@ def train_model(tokens, context_length=64, batch_size=64, n_epochs=50, device="c
             
             total_loss += loss.item()
         
-        avg_loss = total_loss / len(dataloader)
-        scheduler.step(avg_loss)
+        # Calcul des métriques d'entraînement
+        avg_train_loss = total_loss / len(train_dataloader)
         
-        if avg_loss < best_loss:
-            best_loss = avg_loss
-            torch.save(model.state_dict(), 'best_model.pt')
+        # Évaluation sur le jeu de test
+        test_loss, test_accuracy = evaluate_model(model, test_dataloader, device)
+        
+        # Mise à jour du scheduler
+        scheduler.step(test_loss)
+        
+        # Sauvegarde du meilleur modèle basé sur la précision de test
+        if test_accuracy > best_test_accuracy:
+            best_test_accuracy = test_accuracy
+            torch.save({
+                'epoch': epoch,
+                'model_state_dict': model.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
+                'test_accuracy': test_accuracy,
+                'test_loss': test_loss,
+            }, 'best_model.pt')
         
         if epoch % 5 == 0:
-            print(f"Epoch {epoch}, Loss: {avg_loss:.4f}")
+            print(f"Epoch {epoch}")
+            print(f"Train Loss: {avg_train_loss:.4f}")
+            print(f"Test Loss: {test_loss:.4f}, Test Accuracy: {test_accuracy:.4f}")
+            print("-" * 50)
     
     return model
 
@@ -162,15 +208,26 @@ if __name__ == "__main__":
     data = np.load('market_data_20241108_141411.npy', allow_pickle=True).item()
     tokens = data['tokens']
     
-    # Entraînement
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    model = train_model(tokens, device=device)
+    # Séparation des données en train/test (90/10)
+    train_size = int(0.9 * len(tokens))
+    train_tokens = tokens[:train_size]
+    test_tokens = tokens[train_size:]
     
-    # Création du prédicteur
+    # Entraînement avec validation sur le jeu de test
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    model = train_model(train_tokens, test_tokens, device=device)
+    
+    # Chargement du meilleur modèle
+    checkpoint = torch.load('best_model.pt')
+    model.load_state_dict(checkpoint['model_state_dict'])
+    print(f"Meilleure précision sur le test: {checkpoint['test_accuracy']:.4f}")
+    
+    # Création du prédicteur avec le meilleur modèle
     predictor = TradingPredictor(model, tokenizer, device=device)
     
-    # Exemple de prédiction
-    for token in tokens[-35:-1]:  # Test sur les dernières données
+    # Test sur les dernières données
+    print("\nTest de prédiction sur les dernières données:")
+    for token in test_tokens[-35:-1]:
         distribution = predictor.update_and_predict(token)
         signal = predictor.get_trading_signal(distribution)
         print(f"Token actuel: {token} ({tokenizer.decode(token)})")
