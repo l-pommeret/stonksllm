@@ -113,4 +113,4 @@ async def collect_data_timed(duration_minutes=10):
 
 if __name__ == "__main__":
     loop = asyncio.get_event_loop()
-    data = loop.run_until_complete(collect_data_timed(120))
+    data = loop.run_until_complete(collect_data_timed(10))
