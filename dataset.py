@@ -5,6 +5,7 @@ import nest_asyncio
 import time
 import numpy as np
 from datetime import datetime
+import matplotlib as plt
 
 from tokenizer import PriceChangeTokenizer
 
@@ -24,79 +25,101 @@ async def collect_data_timed(duration_minutes=10):
     start_time = time.time()
     end_time = start_time + (duration_minutes * 60)
     tick_count = 0
+    last_price = None
     
-    print(f"Démarrage collecte à {datetime.now()}")
-    print(f"Durée prévue: {duration_minutes} minutes")
+    # Pour les stats
+    all_pct_changes = []
     
     try:
-        await exchange.load_markets()  # Important: charger les marchés d'abord
+        exchange = ccxt.bitget()
+        await exchange.load_markets()
         
         while time.time() < end_time:
             try:
                 ticker = await exchange.fetch_ticker('BTC/USDT')
                 current_time = time.time()
-                
-                # Stocker les données
                 price = ticker['last']
-                pct_change = (price - ticker['open']) / ticker['open'] * 100  # Calcul manuel du %
-                token = tokenizer.encode(pct_change)
                 
-                timestamps.append(current_time)
-                raw_prices.append(price)
-                context_window.append(token)
+                if last_price is not None:
+                    pct_change = (price - last_price) / last_price * 100
+                    token = tokenizer.encode(pct_change)
+                    
+                    timestamps.append(current_time)
+                    raw_prices.append(price)
+                    context_window.append(token)
+                    all_pct_changes.append(pct_change)
                 
-                # Statistiques
+                last_price = price
+                
                 tick_count += 1
                 elapsed = current_time - start_time
                 remaining = end_time - current_time
-                ticks_per_sec = tick_count / elapsed
                 
-                print(f"\rPrix: {price:.2f}, Var: {pct_change:.3f}%, "
-                      f"Token: {token}, Buffer: {len(context_window)}, "
-                      f"Temps restant: {remaining:.1f}s", end='')
+                if last_price is not None:
+                    print(f"\rPrix: {price:.2f}, Var: {pct_change:.4f}%, "
+                          f"Token: {token}, Buffer: {len(context_window)}, "
+                          f"Temps restant: {remaining:.1f}s", end='')
                 
                 await asyncio.sleep(0.5)
                 
             except Exception as e:
                 print(f"\nErreur pendant tick: {e}")
                 await asyncio.sleep(1)
-    
-    except Exception as e:
-        print(f"\nErreur principale: {e}")
-    
+                
     finally:
-        await exchange.close()  # Important: fermer proprement l'exchange
+        await exchange.close()
         
-        # Sauvegarde finale
         data = {
             'timestamps': list(timestamps),
             'prices': list(raw_prices),
-            'tokens': list(context_window)
+            'tokens': list(context_window),
+            'pct_changes': all_pct_changes
         }
+        
+        # Statistiques détaillées
+        print("\n\nStatistiques sur les variations tick-to-tick:")
+        print(f"Minimum: {min(all_pct_changes):.4f}%")
+        print(f"Maximum: {max(all_pct_changes):.4f}%")
+        print(f"Moyenne: {np.mean(all_pct_changes):.4f}%")
+        print(f"Médiane: {np.median(all_pct_changes):.4f}%")
+        print(f"Écart-type: {np.std(all_pct_changes):.4f}%")
+        
+        # Distribution des tokens
+        unique_tokens, counts = np.unique(list(context_window), return_counts=True)
+        print("\nDistribution des tokens:")
+        for token, count in sorted(zip(unique_tokens, counts), key=lambda x: x[1], reverse=True)[:10]:
+            pct = tokenizer.decode(token)
+            print(f"Token {token} ({pct}): {count} occurrences ({count/len(context_window)*100:.1f}%)")
+        
+        # Exemple de séquence
+        print("\nExemple de séquence (10 derniers ticks):")
+        for i in range(-10, 0):
+            t = list(context_window)[i]
+            p = list(raw_prices)[i]
+            v = list(all_pct_changes)[i]
+            print(f"Prix: {p:.2f} USDT | Variation: {v:.4f}% | Token: {t} ({tokenizer.decode(t)})")
+        
+        # Plot de la distribution des variations
+        plt.figure(figsize=(10, 6))
+        plt.hist(all_pct_changes, bins=50, density=True, alpha=0.7)
+        plt.title('Distribution des variations tick-to-tick')
+        plt.xlabel('Variation (%)')
+        plt.ylabel('Densité')
+        plt.grid(True)
+        plt.show()
+        
+        # Sauvegarde
         timestamp_str = datetime.now().strftime('%Y%m%d_%H%M%S')
         np.save(f'market_data_{timestamp_str}.npy', data)
         
-        print(f"\n\nCollecte terminée à {datetime.now()}")
+        print(f"\nCollecte terminée à {datetime.now()}")
         print(f"Nombre total de ticks: {tick_count}")
-        print(f"Moyenne ticks/sec: {tick_count/elapsed:.2f}" if tick_count > 0 else "Pas de données collectées")
+        if tick_count > 0:
+            print(f"Moyenne ticks/sec: {tick_count/elapsed:.2f}")
         print(f"Données sauvegardées dans market_data_{timestamp_str}.npy")
         
         return data
 
-# Lancer la collecte
-loop = asyncio.get_event_loop()
-data = loop.run_until_complete(collect_data_timed(10))
-
-# Afficher les statistiques si on a des données
-if len(data['tokens']) > 0:
-    tokens_array = np.array(data['tokens'])
-    print("\nStatistiques des tokens:")
-    print(f"Min: {min(tokens_array)}")
-    print(f"Max: {max(tokens_array)}")
-    print(f"Moyenne: {np.mean(tokens_array):.2f}")
-    print(f"Écart-type: {np.std(tokens_array):.2f}")
-    
-    unique_tokens, counts = np.unique(tokens_array, return_counts=True)
-    print("\nTop 5 tokens les plus fréquents:")
-    for token, count in sorted(zip(unique_tokens, counts), key=lambda x: x[1], reverse=True)[:5]:
-        print(f"Token {token} ({tokenizer.decode(token)}): {count} occurrences")
+if __name__ == "__main__":
+    loop = asyncio.get_event_loop()
+    data = loop.run_until_complete(collect_data_timed(1))
