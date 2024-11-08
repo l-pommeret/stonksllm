@@ -59,7 +59,7 @@ class FastTokenTransformer(nn.Module):
         return F.softmax(x, dim=-1)
 
 class PriceDataset(Dataset):
-    def __init__(self, tokens, context_length=32):
+    def __init__(self, tokens, context_length=64):
         self.data = torch.tensor(tokens, dtype=torch.long)
         self.context_length = context_length
         
@@ -71,7 +71,7 @@ class PriceDataset(Dataset):
         y = self.data[idx + self.context_length]
         return x, y
 
-def train_model(tokens, context_length=32, batch_size=64, n_epochs=50, device="cpu"):
+def train_model(tokens, context_length=64, batch_size=64, n_epochs=50, device="cpu"):
     # Préparation des données
     dataset = PriceDataset(tokens, context_length)
     dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
@@ -111,7 +111,7 @@ def train_model(tokens, context_length=32, batch_size=64, n_epochs=50, device="c
     return model
 
 class TradingPredictor:
-    def __init__(self, model, tokenizer, context_length=32, device="cpu"):
+    def __init__(self, model, tokenizer, context_length=64, device="cpu"):
         self.model = model.to(device)
         self.tokenizer = tokenizer
         self.context_length = context_length

@@ -99,15 +99,6 @@ async def collect_data_timed(duration_minutes=10):
             v = list(all_pct_changes)[i]
             print(f"Prix: {p:.2f} USDT | Variation: {v:.4f}% | Token: {t} ({tokenizer.decode(t)})")
         
-        # Plot de la distribution des variations
-        plt.figure(figsize=(10, 6))
-        plt.hist(all_pct_changes, bins=50, density=True, alpha=0.7)
-        plt.title('Distribution des variations tick-to-tick')
-        plt.xlabel('Variation (%)')
-        plt.ylabel('Densité')
-        plt.grid(True)
-        plt.show()
-        
         # Sauvegarde
         timestamp_str = datetime.now().strftime('%Y%m%d_%H%M%S')
         np.save(f'market_data_{timestamp_str}.npy', data)
