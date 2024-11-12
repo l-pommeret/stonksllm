@@ -1,9 +1,24 @@
+from collections import deque
 import ccxt.async_support as ccxt
 import asyncio
+import nest_asyncio
 import time
 import numpy as np
 from datetime import datetime
-from collections import deque
+import matplotlib.pyplot as plt
+
+from tokenizer import PriceChangeTokenizer
+
+# Permet d'imbriquer les event loops dans Jupyter
+nest_asyncio.apply()
+
+# Initialisation avec les nouveaux paramètres
+tokenizer = PriceChangeTokenizer(bucket_size=0.002, min_pct=-0.5, max_pct=0.5)
+context_window = deque(maxlen=2400)  # 20 minutes (1 tick/0.5s)
+raw_prices = deque(maxlen=2400)
+timestamps = deque(maxlen=2400)
+
+exchange = ccxt.bitget()
 
 class FuturesDataCollector:
     def __init__(self, 
@@ -101,10 +116,11 @@ class FuturesDataCollector:
                 print(f"Médiane: {np.median(all_pct_changes):.4f}%")
                 print(f"Écart-type: {np.std(all_pct_changes):.4f}%")
             
-            np.save(f'dataset.npy', data)
-            print(f"\nDonnées sauvegardées dans dataset.npy")
+            timestamp_str = datetime.now().strftime('%Y%m%d_%H%M%S')
+            np.save(f'futures_dataset_{timestamp_str}.npy', data)
+            print(f"\nDonnées sauvegardées dans futures_dataset_{timestamp_str}.npy")
 
 if __name__ == "__main__":
     collector = FuturesDataCollector()
     loop = asyncio.get_event_loop()
-    loop.run_until_complete(collector.collect_data_timed(20))  # 20 minutes de données
+    loop.run_until_complete(collector.collect_data_timed(20))  
