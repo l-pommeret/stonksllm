@@ -99,7 +99,7 @@ async def collect_data_timed(duration_minutes=20):
         
         # Sauvegarde
         timestamp_str = datetime.now().strftime('%Y%m%d_%H%M%S')
-        np.save(f'market_data_{timestamp_str}.npy', data)
+        np.save(f'dataset.npy', data)
         
         print(f"\nCollecte terminée à {datetime.now()}")
         print(f"Nombre total de ticks: {tick_count}")

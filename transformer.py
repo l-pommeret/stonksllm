@@ -254,7 +254,7 @@ class TradingPredictor:
 # Exemple d'utilisation
 if __name__ == "__main__":
     # Chargement des données
-    data = np.load('market_data_20241108_141411.npy', allow_pickle=True).item()
+    data = np.load('dataset.npy', allow_pickle=True).item()
     tokens = data['tokens']
     
     # Séparation des données en train/test (90/10)
