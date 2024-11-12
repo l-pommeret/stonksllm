@@ -1,0 +1,8 @@
+# .gitignore
+config.py
+*.pyc
+__pycache__/
+*.npy
+*.json
+venv/
+.env
