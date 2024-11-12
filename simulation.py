@@ -1,12 +1,23 @@
 import ccxt.async_support as ccxt
 import asyncio
 import time
+import torch
 import numpy as np
 from datetime import datetime
-
-from inference import predictor, calculate_confidence
 from dataset import tokenizer
+from transformer import FastTokenTransformer, TradingPredictor
 
+# Configuration de l'API Bitget
+BITGET_CONFIG = {
+    'apiKey': 'bg_88c...',     # Complétez votre clé API
+    'secret': '3fba3...',      # Complétez votre clé secrète
+    'password': '',            # Ajoutez votre mot de passe API
+    'options': {
+        'defaultType': 'swap',    # Mode futures/swap
+        'defaultSubType': 'linear' # Futures USDT-M
+    },
+    'enableRateLimit': True
+}
 
 class BitgetFuturesTrader:
     def __init__(
@@ -17,18 +28,12 @@ class BitgetFuturesTrader:
         position_size=0.1,  # Taille de position en % du capital
         testnet=True
     ):
-        # Configuration de l'exchange
-        self.exchange = ccxt.bitget({
-            'enableRateLimit': True,
-            'options': {
-                'defaultType': 'swap',  # Mode futures/swap
-                'defaultSubType': 'linear',  # Futures USDT-M
-                'createMarketBuyOrderRequiresPrice': False
-            }
-        })
+        # Configuration de l'exchange avec les credentials
+        self.exchange = ccxt.bitget(BITGET_CONFIG)
         
         if testnet:
             self.exchange.set_sandbox_mode(True)
+            print("Mode testnet activé")
             
         self.predictor = predictor
         self.symbol = symbol
@@ -40,17 +45,26 @@ class BitgetFuturesTrader:
         """Configure le compte et les paramètres initiaux"""
         await self.exchange.load_markets()
         
+        try:
+            # Test de connexion API
+            balance = await self.exchange.fetch_balance()
+            print("Connexion API réussie!")
+        except Exception as e:
+            print(f"Erreur de connexion API: {e}")
+            return False
+        
         # Configuration du levier
         try:
             await self.exchange.set_leverage(self.leverage, self.symbol)
             print(f"Levier configuré à {self.leverage}x")
         except Exception as e:
             print(f"Erreur lors de la configuration du levier: {e}")
+            return False
             
         # Récupération du solde initial
-        balance = await self.exchange.fetch_balance()
         self.initial_balance = float(balance['USDT']['free'])
         print(f"Balance initiale: {self.initial_balance} USDT")
+        return True
     
     async def get_position_info(self):
         """Récupère les informations sur la position actuelle"""
@@ -119,7 +133,10 @@ class BitgetFuturesTrader:
     
     async def run(self, duration_seconds=3600, confidence_threshold=0.7):
         """Lance le trader sur la durée spécifiée"""
-        await self.initialize()
+        if not await self.initialize():
+            print("Échec de l'initialisation, arrêt du trader")
+            return
+            
         start_time = time.time()
         trades_executed = 0
         
@@ -178,7 +195,14 @@ class BitgetFuturesTrader:
             
             await self.exchange.close()
 
-# Utilisation:
+# Chargement du modèle
+device = "cuda" if torch.cuda.is_available() else "cpu"
+model = FastTokenTransformer().to(device)
+model.load_state_dict(torch.load('best_model.pt'))
+model.eval()
+predictor = TradingPredictor(model, tokenizer, device=device)
+
+# Fonction principale
 async def main():
     trader = BitgetFuturesTrader(
         predictor=predictor,
@@ -189,5 +213,6 @@ async def main():
     await trader.run(duration_seconds=3600)  # Test sur 1 heure
 
 # Lancement
-loop = asyncio.get_event_loop()
-loop.run_until_complete(main())
+if __name__ == "__main__":
+    loop = asyncio.get_event_loop()
+    loop.run_until_complete(main())
