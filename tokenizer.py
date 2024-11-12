@@ -12,9 +12,9 @@ class PriceChangeTokenizer:
         Initialise le tokenizer avec des buckets de taille fixe
         
         Args:
-            bucket_size: Taille d'un bucket en pourcentage (default: 0.05%)
-            min_pct: Pourcentage minimum avant token spécial (default: -5%)
-            max_pct: Pourcentage maximum avant token spécial (default: 5%)
+            bucket_size: Taille d'un bucket en pourcentage 
+            min_pct: Pourcentage minimum avant token spécial 
+            max_pct: Pourcentage maximum avant token spécial 
         """
         self.bucket_size = bucket_size
         self.min_pct = min_pct

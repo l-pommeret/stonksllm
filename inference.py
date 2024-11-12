@@ -4,45 +4,63 @@ import time
 import torch
 import numpy as np
 from datetime import datetime
-from dataset import tokenizer
+from tokenizer import PriceChangeTokenizer
 from transformer import FastTokenTransformer, TradingPredictor
 
-# Chargement du modèle
+# Initialisation avec les nouveaux paramètres
 device = "cuda" if torch.cuda.is_available() else "cpu"
-model = FastTokenTransformer().to(device)
-model.load_state_dict(torch.load('best_model.pt'))
-model.eval()  # Mode inférence
+tokenizer = PriceChangeTokenizer(bucket_size=0.002, min_pct=-0.5, max_pct=0.5)
+model = FastTokenTransformer(n_tokens=tokenizer.vocab_size).to(device)
+checkpoint = torch.load('best_model.pt')
+model.load_state_dict(checkpoint['model_state_dict'])
+model.eval()
+
 predictor = TradingPredictor(model, tokenizer, device=device)
 exchange = ccxt.bitget()
 
 def calculate_confidence(distribution):
     """
     Calcule le niveau de confiance basé sur l'écart avec une distribution uniforme.
+    Retourne une valeur entre 0 et 1, où 1 indique une confiance maximale.
     """
     uniform_dist = torch.ones_like(distribution) / len(distribution)
     kl_div = torch.sum(distribution * torch.log(distribution / uniform_dist))
     confidence = 1 - torch.exp(-kl_div)
     return confidence.item()
 
-def evaluate_prediction_accuracy(predicted_distribution, next_pct_change, tolerance=0.05):
+def evaluate_prediction_accuracy(predicted_distribution, next_pct_change, tolerance=0.002):
     """
     Évalue l'exactitude de la prédiction par rapport à la variation réelle
     
     Args:
         predicted_distribution: Distribution de probabilité sur les tokens
         next_pct_change: Variation réelle observée
-        tolerance: Marge d'erreur acceptée en pourcentage absolu
+        tolerance: Marge d'erreur acceptée (ajustée à la taille des buckets)
     
     Returns:
         dict: Métriques d'accuracy
     """
     # Token le plus probable
     max_prob_token = torch.argmax(predicted_distribution).item()
-    predicted_pct = (max_prob_token - 100) * 0.05  # Conversion token -> pourcentage
+    
+    # Conversion token -> pourcentage
+    if max_prob_token == 0:  # BELOW_MIN_TOKEN
+        predicted_pct = tokenizer.min_pct
+    elif max_prob_token == tokenizer.vocab_size - 1:  # ABOVE_MAX_TOKEN
+        predicted_pct = tokenizer.max_pct
+    else:
+        predicted_pct = tokenizer.buckets[max_prob_token - 1]
     
     # Top-3 tokens les plus probables
     top3_tokens = torch.topk(predicted_distribution, 3).indices.tolist()
-    top3_pcts = [(t - 100) * 0.05 for t in top3_tokens]
+    top3_pcts = []
+    for token in top3_tokens:
+        if token == 0:
+            top3_pcts.append(tokenizer.min_pct)
+        elif token == tokenizer.vocab_size - 1:
+            top3_pcts.append(tokenizer.max_pct)
+        else:
+            top3_pcts.append(tokenizer.buckets[token - 1])
     
     # Calcul des différentes métriques
     exact_match = abs(predicted_pct - next_pct_change) <= tolerance
@@ -70,6 +88,8 @@ async def inference_speed_test(duration_seconds=60, confidence_threshold=0.7):
         print(f"Démarrage test d'inférence sur {duration_seconds} secondes...")
         print(f"Device: {device}")
         print(f"Seuil de confiance: {confidence_threshold}")
+        print(f"Taille bucket: {tokenizer.bucket_size}%")
+        print(f"Range: {tokenizer.min_pct}% à {tokenizer.max_pct}%")
 
         while time.time() - start_time < duration_seconds:
             tick_start = time.perf_counter()
@@ -82,7 +102,7 @@ async def inference_speed_test(duration_seconds=60, confidence_threshold=0.7):
             if last_price is not None:
                 actual_pct_change = (current_price - last_price) / last_price * 100
                 
-                # Si nous avons une prédiction précédente, évaluons son accuracy
+                # Évaluation de la dernière prédiction si disponible
                 if predictions:
                     last_pred = predictions[-1]
                     accuracy = evaluate_prediction_accuracy(last_pred['distribution'], actual_pct_change)
@@ -116,18 +136,19 @@ async def inference_speed_test(duration_seconds=60, confidence_threshold=0.7):
                 'distribution': distribution
             })
             
-            # Affichage temps réel avec métriques d'accuracy si disponibles
+            # Affichage temps réel avec métriques d'accuracy
             accuracy_str = ""
             if accuracy_metrics:
                 last_accuracy = accuracy_metrics[-1]
-                accuracy_str = f"| Erreur: {last_accuracy['error']:.3f}% "
-                accuracy_str += f"| Direction: {'✓' if last_accuracy['direction_match'] else '✗'} "
+                accuracy_str = (f"| Erreur: {last_accuracy['error']:.3f}% "
+                              f"| Direction: {'✓' if last_accuracy['direction_match'] else '✗'} "
+                              f"| Exact: {'✓' if last_accuracy['exact_match'] else '✗'}")
             
             print(f"\rPrix: {current_price:.2f} USDT | "
                   f"Token: {token} ({tokenizer.decode(token)}) | "
                   f"Confiance: {confidence:.2%} | "
                   f"Signal: {'🔼' if signal == 1 else '🔽' if signal == -1 else '➡️'} "
-                  f"{accuracy_str}"
+                  f"{accuracy_str} "
                   f"| Inférence: {inference_time:.2f}ms", end='')
                   
             await asyncio.sleep(0.5)
@@ -137,21 +158,40 @@ async def inference_speed_test(duration_seconds=60, confidence_threshold=0.7):
     finally:
         await exchange.close()
         
-    # Statistiques finales
-    if accuracy_metrics:
-        print("\n\nStatistiques de prédiction:")
-        print(f"Nombre total de prédictions évaluées: {len(accuracy_metrics)}")
-        print(f"Accuracy exacte (±0.05%): {np.mean([m['exact_match'] for m in accuracy_metrics]):.2%}")
-        print(f"Accuracy direction: {np.mean([m['direction_match'] for m in accuracy_metrics]):.2%}")
-        print(f"Accuracy top-3: {np.mean([m['top3_match'] for m in accuracy_metrics]):.2%}")
-        print(f"Erreur moyenne: {np.mean([m['error'] for m in accuracy_metrics]):.3f}%")
-        print(f"Erreur médiane: {np.median([m['error'] for m in accuracy_metrics]):.3f}%")
-    
-    print("\nStatistiques d'inférence:")
-    print(f"Temps moyen d'inférence: {np.mean(inference_times):.2f}ms")
-    print(f"Signaux générés: {len([p for p in predictions if p['signal'] != 0])} / {len(predictions)}")
-    print(f"Confiance moyenne: {np.mean([p['confidence'] for p in predictions]):.2%}")
+        # Statistiques finales
+        if accuracy_metrics:
+            print("\n\nStatistiques de prédiction:")
+            print(f"Nombre total de prédictions évaluées: {len(accuracy_metrics)}")
+            print(f"Accuracy exacte (±{tokenizer.bucket_size}%): {np.mean([m['exact_match'] for m in accuracy_metrics]):.2%}")
+            print(f"Accuracy direction: {np.mean([m['direction_match'] for m in accuracy_metrics]):.2%}")
+            print(f"Accuracy top-3: {np.mean([m['top3_match'] for m in accuracy_metrics]):.2%}")
+            print(f"Erreur moyenne: {np.mean([m['error'] for m in accuracy_metrics]):.4f}%")
+            print(f"Erreur médiane: {np.median([m['error'] for m in accuracy_metrics]):.4f}%")
+        
+        print("\nStatistiques d'inférence:")
+        print(f"Temps moyen d'inférence: {np.mean(inference_times):.2f}ms")
+        print(f"Temps médian d'inférence: {np.median(inference_times):.2f}ms")
+        print(f"Signaux générés: {len([p for p in predictions if p['signal'] != 0])} / {len(predictions)}")
+        print(f"Confiance moyenne: {np.mean([p['confidence'] for p in predictions]):.2%}")
+
+        # Sauvegarde des résultats
+        timestamp_str = datetime.now().strftime('%Y%m%d_%H%M%S')
+        results = {
+            'predictions': predictions,
+            'accuracy_metrics': accuracy_metrics,
+            'inference_times': inference_times,
+            'config': {
+                'confidence_threshold': confidence_threshold,
+                'bucket_size': tokenizer.bucket_size,
+                'min_pct': tokenizer.min_pct,
+                'max_pct': tokenizer.max_pct,
+                'vocab_size': tokenizer.vocab_size
+            }
+        }
+        np.save(f'inference_results_{timestamp_str}.npy', results)
+        print(f"\nRésultats sauvegardés dans inference_results_{timestamp_str}.npy")
 
 # Lancer le test
-loop = asyncio.get_event_loop()
-loop.run_until_complete(inference_speed_test(60, confidence_threshold=0.7))
+if __name__ == "__main__":
+    loop = asyncio.get_event_loop()
+    loop.run_until_complete(inference_speed_test(300, confidence_threshold=0.7))  # Test sur 5 minutes

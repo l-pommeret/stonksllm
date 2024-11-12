@@ -1,27 +1,26 @@
 from collections import deque
-import ccxt.async_support as ccxt  # Notez le changement ici
+import ccxt.async_support as ccxt
 import asyncio
 import nest_asyncio
 import time
 import numpy as np
 from datetime import datetime
-import matplotlib as plt
+import matplotlib.pyplot as plt
 
 from tokenizer import PriceChangeTokenizer
 
 # Permet d'imbriquer les event loops dans Jupyter
 nest_asyncio.apply()
 
-# Initialisation
-tokenizer = PriceChangeTokenizer()
-context_window = deque(maxlen=1200)  # 10 minutes
-raw_prices = deque(maxlen=1200)
-timestamps = deque(maxlen=1200)
+# Initialisation avec les nouveaux paramètres
+tokenizer = PriceChangeTokenizer(bucket_size=0.002, min_pct=-0.5, max_pct=0.5)
+context_window = deque(maxlen=2400)  # 20 minutes (1 tick/0.5s)
+raw_prices = deque(maxlen=2400)
+timestamps = deque(maxlen=2400)
 
-# Initialiser l'exchange avec la version async
 exchange = ccxt.bitget()
 
-async def collect_data_timed(duration_minutes=10):
+async def collect_data_timed(duration_minutes=20):
     start_time = time.time()
     end_time = start_time + (duration_minutes * 60)
     tick_count = 0
@@ -36,7 +35,7 @@ async def collect_data_timed(duration_minutes=10):
         
         while time.time() < end_time:
             try:
-                ticker = await exchange.fetch_ticker('DOGE/USDT')
+                ticker = await exchange.fetch_ticker('BTC/USDT')  # Changé pour BTC/USDT
                 current_time = time.time()
                 price = ticker['last']
                 
@@ -50,14 +49,14 @@ async def collect_data_timed(duration_minutes=10):
                     all_pct_changes.append(pct_change)
                 
                 last_price = price
-                
                 tick_count += 1
                 elapsed = current_time - start_time
                 remaining = end_time - current_time
                 
                 if last_price is not None:
                     print(f"\rPrix: {price:.2f}, Var: {pct_change:.4f}%, "
-                          f"Token: {token}, Buffer: {len(context_window)}, "
+                          f"Token: {token} ({tokenizer.decode(token)}), "
+                          f"Buffer: {len(context_window)}, "
                           f"Temps restant: {remaining:.1f}s", end='')
                 
                 await asyncio.sleep(0.5)
@@ -88,8 +87,7 @@ async def collect_data_timed(duration_minutes=10):
         unique_tokens, counts = np.unique(list(context_window), return_counts=True)
         print("\nDistribution des tokens:")
         for token, count in sorted(zip(unique_tokens, counts), key=lambda x: x[1], reverse=True)[:10]:
-            pct = tokenizer.decode(token)
-            print(f"Token {token} ({pct}): {count} occurrences ({count/len(context_window)*100:.1f}%)")
+            print(f"Token {token} ({tokenizer.decode(token)}): {count} occurrences ({count/len(context_window)*100:.1f}%)")
         
         # Exemple de séquence
         print("\nExemple de séquence (10 derniers ticks):")
@@ -113,4 +111,4 @@ async def collect_data_timed(duration_minutes=10):
 
 if __name__ == "__main__":
     loop = asyncio.get_event_loop()
-    data = loop.run_until_complete(collect_data_timed(120))
+    data = loop.run_until_complete(collect_data_timed(20))
