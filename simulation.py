@@ -27,84 +27,80 @@ class Position:
         if self.quantity != 0:
             self.unrealized_pnl = (current_price - self.average_entry) * self.quantity
             
-class FuturesPortfolioSimulator:
+class PortfolioSimulator:
     def __init__(
         self,
         initial_capital: float = 10000.0,
-        maker_fee: float = 0.0002,  # 0.02% pour les futures
-        taker_fee: float = 0.0005,  # 0.05% pour les futures
-        leverage: float = 5,         # Effet de levier x5 par défaut
-        risk_per_trade: float = 0.02,
-        max_position_size: float = 0.8,  # 80% du capital avec levier
-        stop_loss_pct: float = 0.01,     # Plus serré avec le levier
-        take_profit_pct: float = 0.02,   # Plus serré avec le levier
+        maker_fee: float = 0.001,  # 0.1%
+        taker_fee: float = 0.002,  # 0.2%
+        risk_per_trade: float = 0.02,  # 2% du capital
+        max_position_size: float = 0.5,  # 50% du capital
+        stop_loss_pct: float = 0.005,  # 2%
+        take_profit_pct: float = 0.01,  # 4%
     ):
         self.initial_capital = initial_capital
         self.current_capital = initial_capital
         self.maker_fee = maker_fee
         self.taker_fee = taker_fee
-        self.leverage = leverage
         self.risk_per_trade = risk_per_trade
         self.max_position_size = max_position_size
         self.stop_loss_pct = stop_loss_pct
         self.take_profit_pct = take_profit_pct
         
+        # État du portefeuille
         self.position = Position()
-        self.trades = []
-        self.equity_curve = []
+        self.trades: List[Trade] = []
+        self.equity_curve: List[Dict] = []
         
+        # Métriques de performance
         self.peak_capital = initial_capital
         self.max_drawdown = 0.0
         self.win_count = 0
         self.loss_count = 0
         
     def calculate_position_size(self, price: float) -> float:
-        """Calcule la taille de position avec levier"""
-        # Calcul basé sur le capital effectif (avec levier)
-        effective_capital = self.current_capital * self.leverage
-        max_quantity = (effective_capital * self.max_position_size) / price
-        
-        # Ajustement pour le stop loss avec levier
-        risk_amount = self.current_capital * self.risk_per_trade
-        price_to_stop = price * self.stop_loss_pct
-        risk_based_quantity = (risk_amount * self.leverage) / price_to_stop
-        
+        """Calcule la taille de position optimale basée sur le risk management"""
+        max_quantity = (self.current_capital * self.max_position_size) / price
+        risk_based_quantity = (self.current_capital * self.risk_per_trade) / (price * self.stop_loss_pct)
         return min(max_quantity, risk_based_quantity)
     
     def execute_trade(self, timestamp: datetime, side: str, price: float, confidence: float) -> bool:
-        """Exécute un trade futures"""
+        """Exécute un trade en prenant en compte les règles de gestion des risques"""
+        # Vérification si nous avons déjà une position
         if side == 'BUY' and self.position.quantity > 0:
             return False
         if side == 'SELL' and self.position.quantity < 0:
             return False
-        
-        # Calcul de la quantité avec levier
+            
+        # Calcul de la quantité
         base_quantity = self.calculate_position_size(price)
-        quantity = base_quantity * confidence
+        quantity = base_quantity * confidence  # Ajuste la taille selon la confiance
         
-        # Calcul des frais (sur la position avec levier)
-        position_value = quantity * price
-        fees = position_value * self.taker_fee
+        # Calcul des frais (suppose taker fee pour être conservateur)
+        fees = abs(quantity * price * self.taker_fee)
         
-        # Vérification de la marge requise
-        margin_required = position_value / self.leverage
-        if margin_required + fees > self.current_capital:
+        # Vérification du capital disponible
+        total_cost = (quantity * price) + fees
+        if total_cost > self.current_capital:
             return False
-        
+            
         # Exécution du trade
         if side == 'BUY':
             self.position.quantity += quantity
-            self.position.average_entry = price if self.position.quantity == quantity else (
-                (self.position.average_entry * (self.position.quantity - quantity) + price * quantity)
-                / self.position.quantity
-            )
-        else:
+            if self.position.quantity == quantity:  # Nouvelle position
+                self.position.average_entry = price
+            else:  # Moyenne de position
+                self.position.average_entry = (
+                    (self.position.average_entry * (self.position.quantity - quantity) + price * quantity)
+                    / self.position.quantity
+                )
+        else:  # SELL
             self.position.quantity -= quantity
+            
+        # Mise à jour du capital
+        self.current_capital -= total_cost
         
-        # Mise à jour du capital (uniquement les frais sont déduites)
-        self.current_capital -= fees
-        
-        # Enregistrement
+        # Enregistrement du trade
         trade = Trade(
             timestamp=timestamp,
             side=side,
@@ -113,37 +109,49 @@ class FuturesPortfolioSimulator:
             fees=fees
         )
         self.trades.append(trade)
+        
+        # Mise à jour des métriques
         self._update_metrics()
         return True
     
-    def check_exit_conditions(self, current_price: float, funding_rate: float = 0) -> Optional[str]:
-        """Vérifie les conditions de sortie incluant le taux de funding"""
+    def _update_metrics(self):
+        """Met à jour les métriques de performance du portefeuille"""
+        # Calcul du capital total (incluant positions non réalisées)
+        total_equity = self.current_capital
+        if self.position.quantity != 0:
+            total_equity += self.position.unrealized_pnl
+        
+        # Mise à jour du drawdown
+        self.peak_capital = max(self.peak_capital, total_equity)
+        current_drawdown = (self.peak_capital - total_equity) / self.peak_capital
+        self.max_drawdown = max(self.max_drawdown, current_drawdown)
+        
+        # Enregistrement dans l'equity curve
+        self.equity_curve.append({
+            'timestamp': self.trades[-1].timestamp if self.trades else datetime.now(),
+            'equity': total_equity,
+            'drawdown': current_drawdown
+        })
+    
+    def check_exit_conditions(self, current_price: float) -> Optional[str]:
+        """Vérifie les conditions de sortie (stop loss / take profit)"""
         if self.position.quantity == 0:
             return None
-        
+            
         self.position.update(current_price)
         
-        # Calcul du PnL en pourcentage incluant le funding
+        # Calcul des pourcentages de profit/perte
         pnl_pct = (current_price - self.position.average_entry) / self.position.average_entry
-        # Ajout de l'impact du funding rate (positif pour les longs si négatif et vice versa)
-        if self.position.quantity > 0:
-            pnl_pct -= funding_rate  # Pour les positions longues
-        else:
-            pnl_pct += funding_rate  # Pour les positions courtes
-        
-        # Amplification des seuils par le levier
-        effective_stop_loss = self.stop_loss_pct / self.leverage
-        effective_take_profit = self.take_profit_pct / self.leverage
         
         if self.position.quantity > 0:  # Position longue
-            if pnl_pct <= -effective_stop_loss:
+            if pnl_pct <= -self.stop_loss_pct:
                 return 'STOP_LOSS'
-            elif pnl_pct >= effective_take_profit:
+            elif pnl_pct >= self.take_profit_pct:
                 return 'TAKE_PROFIT'
         else:  # Position courte
-            if pnl_pct >= effective_stop_loss:
+            if pnl_pct >= self.stop_loss_pct:
                 return 'STOP_LOSS'
-            elif pnl_pct <= -effective_take_profit:
+            elif pnl_pct <= -self.take_profit_pct:
                 return 'TAKE_PROFIT'
         
         return None
