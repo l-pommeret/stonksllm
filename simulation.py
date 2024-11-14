@@ -57,12 +57,6 @@ class PortfolioSimulator:
         self.max_drawdown = 0.0
         self.win_count = 0
         self.loss_count = 0
-        
-    def calculate_position_size(self, price: float) -> float:
-        """Calcule la taille de position optimale basée sur le risk management"""
-        max_quantity = (self.current_capital * self.max_position_size) / price
-        risk_based_quantity = (self.current_capital * self.risk_per_trade) / (price * self.stop_loss_pct)
-        return min(max_quantity, risk_based_quantity)
     
     def execute_trade(self, timestamp: datetime, side: str, price: float, confidence: float) -> bool:
         """Exécute un trade en prenant en compte les règles de gestion des risques"""
@@ -195,24 +189,25 @@ class PortfolioSimulator:
         return True
     
     def get_performance_metrics(self) -> Dict:
-        """Calcule et retourne les métriques de performance du portefeuille"""
+        """Calcule et retourne les métriques de performance du portefeuille en gérant les cas de division par zéro"""
         total_trades = self.win_count + self.loss_count
+        # Gestion du win rate
         win_rate = self.win_count / total_trades if total_trades > 0 else 0
         
         # Calcul des profits/pertes
         realized_pnl = sum(trade.pnl for trade in self.trades if trade.pnl is not None)
         total_fees = sum(trade.fees for trade in self.trades)
         
-        # Calcul du ROI
+        # Calcul du ROI avec vérification
         final_equity = self.equity_curve[-1]['equity'] if self.equity_curve else self.current_capital
-        roi = (final_equity - self.initial_capital) / self.initial_capital
+        roi = (final_equity - self.initial_capital) / self.initial_capital if self.initial_capital != 0 else 0
         
-        # Calcul du Profit Factor
-        gross_profits = sum(trade.pnl for trade in self.trades if trade.pnl and trade.pnl > 0)
-        gross_losses = abs(sum(trade.pnl for trade in self.trades if trade.pnl and trade.pnl < 0))
-        profit_factor = gross_profits / gross_losses if gross_losses != 0 else float('inf')
+        # Calcul du Profit Factor avec gestion des cas limites
+        gross_profits = sum(trade.pnl for trade in self.trades if trade.pnl and trade.pnl > 0) or 0
+        gross_losses = abs(sum(trade.pnl for trade in self.trades if trade.pnl and trade.pnl < 0)) or 1e-9
+        profit_factor = gross_profits / gross_losses  # Maintenant sans risque de division par zéro
         
-        return {
+        metrics = {
             'total_trades': total_trades,
             'win_rate': win_rate,
             'realized_pnl': realized_pnl,
@@ -221,8 +216,25 @@ class PortfolioSimulator:
             'max_drawdown': self.max_drawdown,
             'profit_factor': profit_factor,
             'final_capital': final_equity,
-            'equity_curve': pd.DataFrame(self.equity_curve)
+            'equity_curve': pd.DataFrame(self.equity_curve) if self.equity_curve else pd.DataFrame()
         }
+        
+        return metrics
+
+    def calculate_position_size(self, price: float) -> float:
+        """Calcule la taille de position optimale en évitant les divisions par zéro"""
+        if price <= 0:
+            return 0
+            
+        max_quantity = (self.current_capital * self.max_position_size) / price
+        
+        # Évite la division par zéro pour le stop loss
+        if self.stop_loss_pct <= 0:
+            risk_based_quantity = 0
+        else:
+            risk_based_quantity = (self.current_capital * self.risk_per_trade) / (price * self.stop_loss_pct)
+        
+        return min(max_quantity, risk_based_quantity)
     
 async def run_portfolio_simulation(predictor, duration_seconds=300, confidence_threshold=0.5):
     """
