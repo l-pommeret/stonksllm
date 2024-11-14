@@ -24,8 +24,17 @@ class Position:
         self.realized_pnl: float = 0
         
     def update(self, current_price: float):
-        if self.quantity != 0:
-            self.unrealized_pnl = (current_price - self.average_entry) * self.quantity
+        """Met à jour le PnL non réalisé de la position"""
+        try:
+            if self.quantity != 0 and current_price > 0 and self.average_entry > 0:
+                # Pour une position longue, PnL = (prix actuel - prix d'entrée) * quantité
+                # Pour une position courte, PnL = (prix d'entrée - prix actuel) * quantité
+                self.unrealized_pnl = (current_price - self.average_entry) * self.quantity
+            else:
+                self.unrealized_pnl = 0
+        except Exception as e:
+            print(f"Erreur dans Position.update: {str(e)}")
+            self.unrealized_pnl = 0
             
 class PortfolioSimulator:
     def __init__(
@@ -58,55 +67,6 @@ class PortfolioSimulator:
         self.win_count = 0
         self.loss_count = 0
     
-    def execute_trade(self, timestamp: datetime, side: str, price: float, confidence: float) -> bool:
-        """Exécute un trade en prenant en compte les règles de gestion des risques"""
-        # Vérification si nous avons déjà une position
-        if side == 'BUY' and self.position.quantity > 0:
-            return False
-        if side == 'SELL' and self.position.quantity < 0:
-            return False
-            
-        # Calcul de la quantité
-        base_quantity = self.calculate_position_size(price)
-        quantity = base_quantity * confidence  # Ajuste la taille selon la confiance
-        
-        # Calcul des frais (suppose taker fee pour être conservateur)
-        fees = abs(quantity * price * self.taker_fee)
-        
-        # Vérification du capital disponible
-        total_cost = (quantity * price) + fees
-        if total_cost > self.current_capital:
-            return False
-            
-        # Exécution du trade
-        if side == 'BUY':
-            self.position.quantity += quantity
-            if self.position.quantity == quantity:  # Nouvelle position
-                self.position.average_entry = price
-            else:  # Moyenne de position
-                self.position.average_entry = (
-                    (self.position.average_entry * (self.position.quantity - quantity) + price * quantity)
-                    / self.position.quantity
-                )
-        else:  # SELL
-            self.position.quantity -= quantity
-            
-        # Mise à jour du capital
-        self.current_capital -= total_cost
-        
-        # Enregistrement du trade
-        trade = Trade(
-            timestamp=timestamp,
-            side=side,
-            price=price,
-            quantity=quantity,
-            fees=fees
-        )
-        self.trades.append(trade)
-        
-        # Mise à jour des métriques
-        self._update_metrics()
-        return True
     
     def _update_metrics(self):
         """Met à jour les métriques de performance du portefeuille"""
@@ -128,27 +88,102 @@ class PortfolioSimulator:
         })
     
     def check_exit_conditions(self, current_price: float) -> Optional[str]:
-        """Vérifie les conditions de sortie (stop loss / take profit)"""
-        if self.position.quantity == 0:
+        """Vérifie les conditions de sortie (stop loss / take profit) de manière sécurisée"""
+        if self.position.quantity == 0 or current_price <= 0 or self.position.average_entry <= 0:
             return None
             
         self.position.update(current_price)
         
-        # Calcul des pourcentages de profit/perte
-        pnl_pct = (current_price - self.position.average_entry) / self.position.average_entry
+        try:
+            # Calcul des pourcentages de profit/perte
+            pnl_pct = ((current_price - self.position.average_entry) / self.position.average_entry if self.position.average_entry != 0 else 0)
+            
+            if self.position.quantity > 0:  # Position longue
+                if pnl_pct <= -self.stop_loss_pct:
+                    return 'STOP_LOSS'
+                elif pnl_pct >= self.take_profit_pct:
+                    return 'TAKE_PROFIT'
+            else:  # Position courte
+                # Inverse la logique pour les positions courtes
+                if pnl_pct >= self.stop_loss_pct:
+                    return 'STOP_LOSS'
+                elif pnl_pct <= -self.take_profit_pct:
+                    return 'TAKE_PROFIT'
         
-        if self.position.quantity > 0:  # Position longue
-            if pnl_pct <= -self.stop_loss_pct:
-                return 'STOP_LOSS'
-            elif pnl_pct >= self.take_profit_pct:
-                return 'TAKE_PROFIT'
-        else:  # Position courte
-            if pnl_pct >= self.stop_loss_pct:
-                return 'STOP_LOSS'
-            elif pnl_pct <= -self.take_profit_pct:
-                return 'TAKE_PROFIT'
+        except Exception as e:
+            print(f"Erreur dans check_exit_conditions: {str(e)}")
+            return None
         
         return None
+
+    def execute_trade(self, timestamp: datetime, side: str, price: float, confidence: float) -> bool:
+        """Exécute un trade avec des vérifications de sécurité supplémentaires"""
+        try:
+            # Vérifications de base
+            if price <= 0 or confidence <= 0:
+                return False
+                
+            # Vérification si nous avons déjà une position
+            if side == 'BUY' and self.position.quantity > 0:
+                return False
+            if side == 'SELL' and self.position.quantity < 0:
+                return False
+                
+            # Calcul de la quantité avec vérification
+            base_quantity = self.calculate_position_size(price)
+            if base_quantity <= 0:
+                return False
+                
+            quantity = base_quantity * min(confidence, 1.0)  # Limite la confiance à 100%
+            
+            # Calcul des frais
+            fees = abs(quantity * price * self.taker_fee)
+            
+            # Vérification du capital disponible
+            total_cost = (quantity * price) + fees
+            if total_cost > self.current_capital or total_cost <= 0:
+                return False
+                
+            # Exécution du trade
+            if side == 'BUY':
+                self.position.quantity += quantity
+                if abs(self.position.quantity) < 1e-8:  # Evite les quantités trop petites
+                    self.position.quantity = 0
+                    return False
+                    
+                if self.position.quantity == quantity:  # Nouvelle position
+                    self.position.average_entry = price
+                else:  # Moyenne de position
+                    try:
+                        self.position.average_entry = (
+                            (self.position.average_entry * (self.position.quantity - quantity) + price * quantity)
+                            / self.position.quantity
+                        )
+                    except ZeroDivisionError:
+                        return False
+            else:  # SELL
+                self.position.quantity -= quantity
+                
+            # Mise à jour du capital
+            self.current_capital -= total_cost
+            
+            # Enregistrement du trade
+            trade = Trade(
+                timestamp=timestamp,
+                side=side,
+                price=price,
+                quantity=quantity,
+                fees=fees
+            )
+            self.trades.append(trade)
+            
+            # Mise à jour des métriques
+            self._update_metrics()
+            return True
+            
+        except Exception as e:
+            print(f"Erreur dans execute_trade: {str(e)}")
+            return False
     
     def close_position(self, timestamp: datetime, price: float, reason: str) -> bool:
         """Ferme la position actuelle"""
