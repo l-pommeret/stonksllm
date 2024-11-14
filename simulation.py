@@ -412,28 +412,29 @@ def get_expected_move(self, distribution):
     """
     Calcule la variation attendue en pourcentage basée sur la distribution prédite
     """
-    bucket_size = 0.002  # 0.002%
-    num_buckets = len(distribution)
+    # Conversion du tensor en numpy array
+    distribution_np = distribution.detach().numpy()
+    
+    # Calcul des valeurs des buckets
+    num_buckets = len(distribution_np)
     bucket_values = np.linspace(-0.5, 0.5, num_buckets)
     
     # Calcul de la moyenne pondérée
-    expected_move = np.sum(bucket_values * distribution)
+    expected_move = np.sum(bucket_values * distribution_np)
     return expected_move  # retourne la variation attendue en pourcentage
 
 async def main():
     """Fonction principale"""
-    # Initialisation du prédicteur
     predictor = MarketPredictor('best_model.pt')
     
     # Ajout de la méthode get_expected_move à l'instance
     predictor.get_expected_move = get_expected_move.__get__(predictor)
     
-    # Lancement de la simulation avec les nouveaux paramètres
     await run_portfolio_simulation(
         predictor,
-        duration_seconds=300,  # 5 minutes
-        confidence_threshold=0.75,  # 75% de confiance minimum
-        min_expected_move=0.3  # 0.3% de variation minimale attendue
+        duration_seconds=300,  
+        confidence_threshold=0.75,
+        min_expected_move=0.3
     )
 
 if __name__ == "__main__":
