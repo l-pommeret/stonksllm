@@ -434,7 +434,7 @@ async def main():
         predictor,
         duration_seconds=300,  
         confidence_threshold=0.75,
-        min_expected_move=0.3
+        min_expected_move=0.1
     )
 
 if __name__ == "__main__":
