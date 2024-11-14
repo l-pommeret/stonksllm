@@ -22,13 +22,12 @@ class Position:
         self.average_entry: float = 0
         self.unrealized_pnl: float = 0
         self.realized_pnl: float = 0
+        self.open_time: Optional[datetime] = None  # Ajout du timestamp d'ouverture
         
     def update(self, current_price: float):
         """Met à jour le PnL non réalisé de la position"""
         try:
             if self.quantity != 0 and current_price > 0 and self.average_entry > 0:
-                # Pour une position longue, PnL = (prix actuel - prix d'entrée) * quantité
-                # Pour une position courte, PnL = (prix d'entrée - prix actuel) * quantité
                 self.unrealized_pnl = (current_price - self.average_entry) * self.quantity
             else:
                 self.unrealized_pnl = 0
@@ -67,20 +66,16 @@ class PortfolioSimulator:
         self.win_count = 0
         self.loss_count = 0
     
-    
     def _update_metrics(self):
         """Met à jour les métriques de performance du portefeuille"""
-        # Calcul du capital total (incluant positions non réalisées)
         total_equity = self.current_capital
         if self.position.quantity != 0:
             total_equity += self.position.unrealized_pnl
         
-        # Mise à jour du drawdown
         self.peak_capital = max(self.peak_capital, total_equity)
         current_drawdown = (self.peak_capital - total_equity) / self.peak_capital
         self.max_drawdown = max(self.max_drawdown, current_drawdown)
         
-        # Enregistrement dans l'equity curve
         self.equity_curve.append({
             'timestamp': self.trades[-1].timestamp if self.trades else datetime.now(),
             'equity': total_equity,
@@ -95,8 +90,8 @@ class PortfolioSimulator:
         self.position.update(current_price)
         
         try:
-            # Calcul des pourcentages de profit/perte
-            pnl_pct = ((current_price - self.position.average_entry) / self.position.average_entry if self.position.average_entry != 0 else 0)
+            pnl_pct = ((current_price - self.position.average_entry) / self.position.average_entry 
+                      if self.position.average_entry != 0 else 0)
             
             if self.position.quantity > 0:  # Position longue
                 if pnl_pct <= -self.stop_loss_pct:
@@ -104,7 +99,6 @@ class PortfolioSimulator:
                 elif pnl_pct >= self.take_profit_pct:
                     return 'TAKE_PROFIT'
             else:  # Position courte
-                # Inverse la logique pour les positions courtes
                 if pnl_pct >= self.stop_loss_pct:
                     return 'STOP_LOSS'
                 elif pnl_pct <= -self.take_profit_pct:
@@ -117,43 +111,36 @@ class PortfolioSimulator:
         return None
 
     def execute_trade(self, timestamp: datetime, side: str, price: float, confidence: float) -> bool:
-        """Exécute un trade avec des vérifications de sécurité supplémentaires"""
+        """Exécute un trade avec des vérifications de sécurité"""
         try:
-            # Vérifications de base
             if price <= 0 or confidence <= 0:
                 return False
                 
-            # Vérification si nous avons déjà une position
             if side == 'BUY' and self.position.quantity > 0:
                 return False
             if side == 'SELL' and self.position.quantity < 0:
                 return False
                 
-            # Calcul de la quantité avec vérification
             base_quantity = self.calculate_position_size(price)
             if base_quantity <= 0:
                 return False
                 
-            quantity = base_quantity * min(confidence, 1.0)  # Limite la confiance à 100%
-            
-            # Calcul des frais
+            quantity = base_quantity * min(confidence, 1.0)
             fees = abs(quantity * price * self.taker_fee)
-            
-            # Vérification du capital disponible
             total_cost = (quantity * price) + fees
+            
             if total_cost > self.current_capital or total_cost <= 0:
                 return False
                 
-            # Exécution du trade
             if side == 'BUY':
                 self.position.quantity += quantity
-                if abs(self.position.quantity) < 1e-8:  # Evite les quantités trop petites
+                if abs(self.position.quantity) < 1e-8:
                     self.position.quantity = 0
                     return False
                     
-                if self.position.quantity == quantity:  # Nouvelle position
+                if self.position.quantity == quantity:
                     self.position.average_entry = price
-                else:  # Moyenne de position
+                else:
                     try:
                         self.position.average_entry = (
                             (self.position.average_entry * (self.position.quantity - quantity) + price * quantity)
@@ -161,13 +148,14 @@ class PortfolioSimulator:
                         )
                     except ZeroDivisionError:
                         return False
-            else:  # SELL
+            else:
                 self.position.quantity -= quantity
                 
-            # Mise à jour du capital
             self.current_capital -= total_cost
             
-            # Enregistrement du trade
+            # Enregistrement du timestamp d'ouverture
+            self.position.open_time = timestamp
+            
             trade = Trade(
                 timestamp=timestamp,
                 side=side,
@@ -177,7 +165,6 @@ class PortfolioSimulator:
             )
             self.trades.append(trade)
             
-            # Mise à jour des métriques
             self._update_metrics()
             return True
             
@@ -194,18 +181,15 @@ class PortfolioSimulator:
         quantity = abs(self.position.quantity)
         fees = quantity * price * self.taker_fee
         
-        # Calcul du PnL
         pnl = (price - self.position.average_entry) * quantity * (1 if side == 'SELL' else -1)
         pnl -= fees
         
-        # Mise à jour du capital et des statistiques
         self.current_capital += (quantity * price) - fees
         if pnl > 0:
             self.win_count += 1
         else:
             self.loss_count += 1
         
-        # Enregistrement du trade de clôture
         trade = Trade(
             timestamp=timestamp,
             side=side,
@@ -216,31 +200,24 @@ class PortfolioSimulator:
         )
         self.trades.append(trade)
         
-        # Réinitialisation de la position
         self.position = Position()
-        
-        # Mise à jour des métriques
         self._update_metrics()
         return True
     
     def get_performance_metrics(self) -> Dict:
-        """Calcule et retourne les métriques de performance du portefeuille en gérant les cas de division par zéro"""
+        """Calcule et retourne les métriques de performance"""
         total_trades = self.win_count + self.loss_count
-        # Gestion du win rate
         win_rate = self.win_count / total_trades if total_trades > 0 else 0
         
-        # Calcul des profits/pertes
         realized_pnl = sum(trade.pnl for trade in self.trades if trade.pnl is not None)
         total_fees = sum(trade.fees for trade in self.trades)
         
-        # Calcul du ROI avec vérification
         final_equity = self.equity_curve[-1]['equity'] if self.equity_curve else self.current_capital
         roi = (final_equity - self.initial_capital) / self.initial_capital if self.initial_capital != 0 else 0
         
-        # Calcul du Profit Factor avec gestion des cas limites
         gross_profits = sum(trade.pnl for trade in self.trades if trade.pnl and trade.pnl > 0) or 0
         gross_losses = abs(sum(trade.pnl for trade in self.trades if trade.pnl and trade.pnl < 0)) or 1e-9
-        profit_factor = gross_profits / gross_losses  # Maintenant sans risque de division par zéro
+        profit_factor = gross_profits / gross_losses
         
         metrics = {
             'total_trades': total_trades,
@@ -257,13 +234,12 @@ class PortfolioSimulator:
         return metrics
 
     def calculate_position_size(self, price: float) -> float:
-        """Calcule la taille de position optimale en évitant les divisions par zéro"""
+        """Calcule la taille de position optimale"""
         if price <= 0:
             return 0
             
         max_quantity = (self.current_capital * self.max_position_size) / price
         
-        # Évite la division par zéro pour le stop loss
         if self.stop_loss_pct <= 0:
             risk_based_quantity = 0
         else:
@@ -272,9 +248,7 @@ class PortfolioSimulator:
         return min(max_quantity, risk_based_quantity)
     
 async def run_portfolio_simulation(predictor, duration_seconds=300, confidence_threshold=0.5):
-    """
-    Exécute la simulation du portefeuille en temps réel avec le prédicteur
-    """
+    """Exécute la simulation du portefeuille en temps réel"""
     portfolio = PortfolioSimulator(
         initial_capital=10000.0,
         maker_fee=0.001,
@@ -298,27 +272,32 @@ async def run_portfolio_simulation(predictor, duration_seconds=300, confidence_t
         
         while time.time() - start_time < duration_seconds:
             try:
-                # Récupération du prix actuel
                 ticker = await predictor.exchange.fetch_ticker('BTC/USDT')
                 current_price = ticker['last']
                 current_time = datetime.now()
                 
                 if last_price is not None:
-                    # Calcul de la variation
                     pct_change = (current_price - last_price) / last_price * 100
                     current_token = predictor.tokenizer.encode(pct_change)
                     
-                    # Prédiction et calcul de la confiance
                     distribution = predictor.predictor.update_and_predict(current_token)
                     confidence = predictor.calculate_confidence(distribution) if context_full else 0.0
                     
-                    # Vérification du remplissage du contexte
                     if not context_full and len(predictor.predictor.context) >= predictor.predictor.context_length:
                         context_full = True
                         print("\nContexte rempli, début du trading")
                     
                     # Gestion des positions existantes
                     if portfolio.position.quantity != 0:
+                        # Vérification du temps écoulé depuis l'ouverture
+                        if portfolio.position.open_time:
+                            position_age = (current_time - portfolio.position.open_time).total_seconds()
+                            if position_age >= 1:  # Fermeture après 1 seconde
+                                portfolio.close_position(current_time, current_price, "TIME_LIMIT")
+                                print(f"\n🕒 Position fermée - Raison: TIME_LIMIT après {position_age:.1f}s")
+                                continue
+                        
+                        # Vérification des autres conditions de sortie
                         exit_signal = portfolio.check_exit_conditions(current_price)
                         if exit_signal:
                             portfolio.close_position(current_time, current_price, exit_signal)
@@ -343,23 +322,30 @@ async def run_portfolio_simulation(predictor, duration_seconds=300, confidence_t
                     metrics = portfolio.get_performance_metrics()
                     status = "READY" if context_full else "FILLING"
                     
+                    # Ajout de l'âge de la position dans l'affichage
+                    position_age = ""
+                    if portfolio.position.quantity != 0 and portfolio.position.open_time:
+                        age = (current_time - portfolio.position.open_time).total_seconds()
+                        position_age = f"Age: {age:.1f}s | "
+                    
                     print(f"\rPrix: {current_price:.2f} | "
                           f"Capital: {metrics['final_capital']:.2f} | "
                           f"ROI: {metrics['roi']:.2%} | "
                           f"Position: {portfolio.position.quantity:.4f} | "
+                          f"{position_age}"
                           f"PnL: {portfolio.position.unrealized_pnl:.2f} | "
                           f"Conf: {confidence:.2%} | "
                           f"Status: {status}", end='')
                 
                 last_price = current_price
-                await asyncio.sleep(1)
+                await asyncio.sleep(0.1)  # Réduit pour plus de précision
                 
             except Exception as e:
                 print(f"\nErreur pendant le tick: {str(e)}")
-                await asyncio.sleep(1)
+                await asyncio.sleep(0.1)
                 continue
         
-        # Fermeture de la position finale si elle existe
+        # Fermeture de la position finale
         if portfolio.position.quantity != 0:
             portfolio.close_position(datetime.now(), current_price, "END_OF_SIMULATION")
         
@@ -392,7 +378,7 @@ async def run_portfolio_simulation(predictor, duration_seconds=300, confidence_t
         np.save(f'simulation_results_{timestamp_str}.npy', results)
         print(f"\nRésultats sauvegardés dans simulation_results_{timestamp_str}.npy")
         
-        # Plot de la courbe de capital si possible
+        # Plot de la courbe de capital
         try:
             import matplotlib.pyplot as plt
             plt.figure(figsize=(12, 6))
