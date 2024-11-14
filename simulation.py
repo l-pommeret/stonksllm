@@ -252,8 +252,8 @@ async def run_portfolio_simulation(predictor, duration_seconds=300, confidence_t
         taker_fee=0.002,
         risk_per_trade=0.02,
         max_position_size=0.5,
-        stop_loss_pct=0.02,
-        take_profit_pct=0.04
+        stop_loss_pct=0.002,
+        take_profit_pct=0.004
     )
     
     print(f"\nDémarrage de la simulation sur {duration_seconds} secondes")
@@ -434,7 +434,7 @@ async def main():
         predictor,
         duration_seconds=300,  
         confidence_threshold=0.52,
-        min_expected_move=0.002
+        min_expected_move=0.02
     )
 
 if __name__ == "__main__":
