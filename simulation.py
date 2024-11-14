@@ -22,7 +22,7 @@ class Position:
         self.average_entry: float = 0
         self.unrealized_pnl: float = 0
         self.realized_pnl: float = 0
-        self.open_time: Optional[datetime] = None  # Ajout du timestamp d'ouverture
+        self.open_time: Optional[datetime] = None
         
     def update(self, current_price: float):
         """Met à jour le PnL non réalisé de la position"""
@@ -43,8 +43,8 @@ class PortfolioSimulator:
         taker_fee: float = 0.002,  # 0.2%
         risk_per_trade: float = 0.02,  # 2% du capital
         max_position_size: float = 0.5,  # 50% du capital
-        stop_loss_pct: float = 0.005,  # 2%
-        take_profit_pct: float = 0.01,  # 4%
+        stop_loss_pct: float = 0.02,  # 2%
+        take_profit_pct: float = 0.04,  # 4%
     ):
         self.initial_capital = initial_capital
         self.current_capital = initial_capital
@@ -83,7 +83,7 @@ class PortfolioSimulator:
         })
     
     def check_exit_conditions(self, current_price: float) -> Optional[str]:
-        """Vérifie les conditions de sortie (stop loss / take profit) de manière sécurisée"""
+        """Vérifie les conditions de sortie"""
         if self.position.quantity == 0 or current_price <= 0 or self.position.average_entry <= 0:
             return None
             
@@ -103,7 +103,6 @@ class PortfolioSimulator:
                     return 'STOP_LOSS'
                 elif pnl_pct <= -self.take_profit_pct:
                     return 'TAKE_PROFIT'
-        
         except Exception as e:
             print(f"Erreur dans check_exit_conditions: {str(e)}")
             return None
@@ -111,7 +110,7 @@ class PortfolioSimulator:
         return None
 
     def execute_trade(self, timestamp: datetime, side: str, price: float, confidence: float) -> bool:
-        """Exécute un trade avec des vérifications de sécurité"""
+        """Exécute un trade"""
         try:
             if price <= 0 or confidence <= 0:
                 return False
@@ -171,7 +170,7 @@ class PortfolioSimulator:
         except Exception as e:
             print(f"Erreur dans execute_trade: {str(e)}")
             return False
-    
+        
     def close_position(self, timestamp: datetime, price: float, reason: str) -> bool:
         """Ferme la position actuelle"""
         if self.position.quantity == 0:
@@ -219,7 +218,7 @@ class PortfolioSimulator:
         gross_losses = abs(sum(trade.pnl for trade in self.trades if trade.pnl and trade.pnl < 0)) or 1e-9
         profit_factor = gross_profits / gross_losses
         
-        metrics = {
+        return {
             'total_trades': total_trades,
             'win_rate': win_rate,
             'realized_pnl': realized_pnl,
@@ -230,8 +229,6 @@ class PortfolioSimulator:
             'final_capital': final_equity,
             'equity_curve': pd.DataFrame(self.equity_curve) if self.equity_curve else pd.DataFrame()
         }
-        
-        return metrics
 
     def calculate_position_size(self, price: float) -> float:
         """Calcule la taille de position optimale"""
@@ -246,11 +243,9 @@ class PortfolioSimulator:
             risk_based_quantity = (self.current_capital * self.risk_per_trade) / (price * self.stop_loss_pct)
         
         return min(max_quantity, risk_based_quantity)
-    
-async def run_portfolio_simulation(predictor, duration_seconds=300, confidence_threshold=0.75):  # Augmenté à 75%
-    """
-    Exécute la simulation du portefeuille en temps réel avec critères plus stricts
-    """
+
+async def run_portfolio_simulation(predictor, duration_seconds=300, confidence_threshold=0.75, min_expected_move=0.3):
+    """Exécute la simulation du portefeuille en temps réel"""
     portfolio = PortfolioSimulator(
         initial_capital=10000.0,
         maker_fee=0.001,
@@ -264,6 +259,7 @@ async def run_portfolio_simulation(predictor, duration_seconds=300, confidence_t
     print(f"\nDémarrage de la simulation sur {duration_seconds} secondes")
     print(f"Capital initial: {portfolio.initial_capital:,.2f} USDT")
     print(f"Seuil de confiance: {confidence_threshold:.1%}")
+    print(f"Variation minimale attendue: {min_expected_move:.1f}%")
     
     await predictor.exchange.load_markets()
     
@@ -272,7 +268,7 @@ async def run_portfolio_simulation(predictor, duration_seconds=300, confidence_t
         last_price = None
         context_full = False
         last_trade_time = None
-        min_time_between_trades = 5  # Attendre au moins 5 secondes entre les trades
+        min_time_between_trades = 5
         
         while time.time() - start_time < duration_seconds:
             try:
@@ -286,6 +282,7 @@ async def run_portfolio_simulation(predictor, duration_seconds=300, confidence_t
                     
                     distribution = predictor.predictor.update_and_predict(current_token)
                     confidence = predictor.calculate_confidence(distribution) if context_full else 0.0
+                    expected_move = predictor.get_expected_move(distribution) if context_full else 0.0
                     
                     if not context_full and len(predictor.predictor.context) >= predictor.predictor.context_length:
                         context_full = True
@@ -305,22 +302,17 @@ async def run_portfolio_simulation(predictor, duration_seconds=300, confidence_t
                             portfolio.close_position(current_time, current_price, exit_signal)
                             print(f"\n🔄 Position fermée - Raison: {exit_signal}")
                     
-                    # Signaux de trading avec critères plus stricts
+                    # Signaux de trading
                     if context_full and confidence > confidence_threshold:
-                        signal = predictor.predictor.get_trading_signal(distribution)
+                        signal = 1 if expected_move > 0 else -1 if expected_move < 0 else 0
                         
-                        # Vérifier le temps écoulé depuis le dernier trade
                         can_trade = True
                         if last_trade_time:
                             time_since_last_trade = (current_time - last_trade_time).total_seconds()
                             if time_since_last_trade < min_time_between_trades:
                                 can_trade = False
                         
-                        # Vérifier que le signal est fort (très haut ou très bas)
-                        signal_strength = abs(distribution.mean())  # ou une autre mesure de force du signal
-                        min_signal_strength = 0.3  # Seuil minimum pour la force du signal
-                        
-                        if signal != 0 and portfolio.position.quantity == 0 and can_trade and signal_strength > min_signal_strength:
+                        if abs(expected_move) >= min_expected_move and signal != 0 and portfolio.position.quantity == 0 and can_trade:
                             side = 'BUY' if signal == 1 else 'SELL'
                             success = portfolio.execute_trade(
                                 current_time, 
@@ -330,7 +322,8 @@ async def run_portfolio_simulation(predictor, duration_seconds=300, confidence_t
                             )
                             if success:
                                 last_trade_time = current_time
-                                print(f"\n📈 Trade exécuté - {side} à {current_price:.2f} USDT (Signal: {signal_strength:.2f}, Conf: {confidence:.1%})")
+                                print(f"\n📈 Trade exécuté - {side} à {current_price:.2f} USDT "
+                                      f"(Variation attendue: {expected_move:+.2f}%, Conf: {confidence:.1%})")
                     
                     # Affichage en temps réel
                     metrics = portfolio.get_performance_metrics()
@@ -341,11 +334,14 @@ async def run_portfolio_simulation(predictor, duration_seconds=300, confidence_t
                         age = (current_time - portfolio.position.open_time).total_seconds()
                         position_age = f"Age: {age:.1f}s | "
                     
+                    expected_move_str = f"Var. attendue: {expected_move:+.2f}% | " if context_full else ""
+                    
                     print(f"\rPrix: {current_price:.2f} | "
                           f"Capital: {metrics['final_capital']:.2f} | "
                           f"ROI: {metrics['roi']:.2%} | "
                           f"Position: {portfolio.position.quantity:.4f} | "
                           f"{position_age}"
+                          f"{expected_move_str}"
                           f"PnL: {portfolio.position.unrealized_pnl:.2f} | "
                           f"Conf: {confidence:.2%} | "
                           f"Status: {status}", end='')
@@ -384,7 +380,8 @@ async def run_portfolio_simulation(predictor, duration_seconds=300, confidence_t
                 'risk_per_trade': portfolio.risk_per_trade,
                 'stop_loss_pct': portfolio.stop_loss_pct,
                 'take_profit_pct': portfolio.take_profit_pct,
-                'confidence_threshold': confidence_threshold
+                'confidence_threshold': confidence_threshold,
+                'min_expected_move': min_expected_move
             }
         }
         
@@ -411,15 +408,32 @@ async def run_portfolio_simulation(predictor, duration_seconds=300, confidence_t
     finally:
         await predictor.exchange.close()
 
+def get_expected_move(self, distribution):
+    """
+    Calcule la variation attendue en pourcentage basée sur la distribution prédite
+    """
+    bucket_size = 0.002  # 0.002%
+    num_buckets = len(distribution)
+    bucket_values = np.linspace(-0.5, 0.5, num_buckets)
+    
+    # Calcul de la moyenne pondérée
+    expected_move = np.sum(bucket_values * distribution)
+    return expected_move  # retourne la variation attendue en pourcentage
+
 async def main():
+    """Fonction principale"""
     # Initialisation du prédicteur
     predictor = MarketPredictor('best_model.pt')
     
-    # Lancement de la simulation
+    # Ajout de la méthode get_expected_move à l'instance
+    predictor.get_expected_move = get_expected_move.__get__(predictor)
+    
+    # Lancement de la simulation avec les nouveaux paramètres
     await run_portfolio_simulation(
         predictor,
         duration_seconds=300,  # 5 minutes
-        confidence_threshold=0.5  # 50% de confiance minimum
+        confidence_threshold=0.75,  # 75% de confiance minimum
+        min_expected_move=0.3  # 0.3% de variation minimale attendue
     )
 
 if __name__ == "__main__":
