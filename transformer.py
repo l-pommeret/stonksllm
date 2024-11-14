@@ -8,7 +8,7 @@ from sklearn.model_selection import train_test_split
 class FastTokenTransformer(nn.Module):
     def __init__(
         self,
-        n_tokens=502,        # Taille du vocabulaire des tokens
+        n_tokens=52,        # Taille du vocabulaire des tokens
         d_model=64,         # Réduit pour des données plus simples
         nhead=4,            # Réduit pour éviter le surapprentissage
         num_layers=2,       # Réduit pour la rapidité
@@ -134,7 +134,7 @@ def train_model(train_tokens, test_tokens, context_length=32, batch_size=16, n_e
     
     # Modèle
     model = FastTokenTransformer(context_length=context_length).to(device)
-    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.001, weight_decay=0.01)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=5)
     
     best_loss = float('inf')
