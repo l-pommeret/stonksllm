@@ -9,34 +9,42 @@ from transformer import FastTokenTransformer, TradingPredictor
 
 class MarketPredictor:
     def __init__(self, model_path='best_model.pt'):
-        # Chargement du checkpoint et configuration du modèle
+        # Chargement du checkpoint
         self.checkpoint = torch.load(model_path)
-        self.vocab_size = self.checkpoint['model_state_dict']['token_embedding.weight'].shape[0]
-        self.d_model = self.checkpoint['model_state_dict']['token_embedding.weight'].shape[1]
         
-        # Configuration du device
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        print(f"Utilisation de: {self.device}")
+        # Récupération des paramètres du modèle sauvegardé
+        state_dict = self.checkpoint['model_state_dict']
+        self.vocab_size = state_dict['token_embedding.weight'].shape[0]
+        self.d_model = state_dict['token_embedding.weight'].shape[1]
+        self.context_length = state_dict['pos_embedding'].shape[0]  # Utilise la taille du pos_embedding sauvegardé
         
-        # Initialisation du tokenizer
-        self.tokenizer = PriceChangeTokenizer(bucket_size=0.002, min_pct=-0.5, max_pct=0.5)
-        
-        # Initialisation du modèle
+        # Initialisation avec les mêmes paramètres que lors de l'entraînement
         self.model = FastTokenTransformer(
             n_tokens=self.vocab_size,
             d_model=self.d_model,
-            nhead=8,
-            num_layers=3,
-            context_length=128,
+            nhead=4,  # Même valeur que dans l'entraînement
+            num_layers=2,  # Même valeur que dans l'entraînement
+            context_length=self.context_length,  # Utilise la même taille de contexte
             dropout=0.1
-        ).to(self.device)
+        )
         
         # Chargement des poids
         self.model.load_state_dict(self.checkpoint['model_state_dict'])
         self.model.eval()
         
-        # Création du predictor
-        self.predictor = TradingPredictor(self.model, self.tokenizer, device=self.device)
+        # Configuration du device
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.model = self.model.to(self.device)
+        print(f"Utilisation de: {self.device}")
+        
+        # Initialisation du tokenizer et du predictor
+        self.tokenizer = PriceChangeTokenizer(bucket_size=0.002, min_pct=-0.5, max_pct=0.5)
+        self.predictor = TradingPredictor(
+            self.model, 
+            self.tokenizer, 
+            context_length=self.context_length,  # Utilise la même taille de contexte
+            device=self.device
+        )
         
         # Initialisation de l'exchange
         self.exchange = ccxt.bitget()
@@ -44,6 +52,7 @@ class MarketPredictor:
         print(f"\nInitialisation complète:")
         print(f"Taille du vocabulaire: {self.vocab_size}")
         print(f"Dimension du modèle: {self.d_model}")
+        print(f"Taille du contexte: {self.context_length}")
         print(f"Taille bucket: {self.tokenizer.bucket_size}%")
         print(f"Range tokens: {self.tokenizer.min_pct}% à {self.tokenizer.max_pct}%")
     
