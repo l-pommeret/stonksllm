@@ -109,7 +109,7 @@ class MarketPredictor:
             while time.time() - start_time < duration_seconds:
                 try:
                     # Récupération du prix actuel
-                    ticker = await self.exchange.fetch_ticker('BTC/USDT')
+                    ticker = await self.exchange.fetch_ticker('DOGE/USDT')
                     current_price = ticker['last']
                     
                     # Calcul de la variation si nous avons un prix précédent

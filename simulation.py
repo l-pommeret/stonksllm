@@ -272,7 +272,7 @@ async def run_portfolio_simulation(predictor, duration_seconds=300, confidence_t
         
         while time.time() - start_time < duration_seconds:
             try:
-                ticker = await predictor.exchange.fetch_ticker('BTC/USDT')
+                ticker = await predictor.exchange.fetch_ticker('DOGE/USDT')
                 current_price = ticker['last']
                 current_time = datetime.now()
                 

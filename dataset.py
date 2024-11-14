@@ -35,7 +35,7 @@ async def collect_data_timed(duration_minutes=20):
         
         while time.time() < end_time:
             try:
-                ticker = await exchange.fetch_ticker('BTC/USDT')  # Changé pour BTC/USDT
+                ticker = await exchange.fetch_ticker('DOGE/USDT')
                 current_time = time.time()
                 price = ticker['last']
                 
