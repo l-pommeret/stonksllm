@@ -247,8 +247,10 @@ class PortfolioSimulator:
         
         return min(max_quantity, risk_based_quantity)
     
-async def run_portfolio_simulation(predictor, duration_seconds=300, confidence_threshold=0.5):
-    """Exécute la simulation du portefeuille en temps réel"""
+async def run_portfolio_simulation(predictor, duration_seconds=300, confidence_threshold=0.75):  # Augmenté à 75%
+    """
+    Exécute la simulation du portefeuille en temps réel avec critères plus stricts
+    """
     portfolio = PortfolioSimulator(
         initial_capital=10000.0,
         maker_fee=0.001,
@@ -269,6 +271,8 @@ async def run_portfolio_simulation(predictor, duration_seconds=300, confidence_t
         start_time = time.time()
         last_price = None
         context_full = False
+        last_trade_time = None
+        min_time_between_trades = 5  # Attendre au moins 5 secondes entre les trades
         
         while time.time() - start_time < duration_seconds:
             try:
@@ -289,25 +293,34 @@ async def run_portfolio_simulation(predictor, duration_seconds=300, confidence_t
                     
                     # Gestion des positions existantes
                     if portfolio.position.quantity != 0:
-                        # Vérification du temps écoulé depuis l'ouverture
                         if portfolio.position.open_time:
                             position_age = (current_time - portfolio.position.open_time).total_seconds()
-                            if position_age >= 1:  # Fermeture après 1 seconde
+                            if position_age >= 1:
                                 portfolio.close_position(current_time, current_price, "TIME_LIMIT")
                                 print(f"\n🕒 Position fermée - Raison: TIME_LIMIT après {position_age:.1f}s")
                                 continue
                         
-                        # Vérification des autres conditions de sortie
                         exit_signal = portfolio.check_exit_conditions(current_price)
                         if exit_signal:
                             portfolio.close_position(current_time, current_price, exit_signal)
                             print(f"\n🔄 Position fermée - Raison: {exit_signal}")
                     
-                    # Signaux de trading
+                    # Signaux de trading avec critères plus stricts
                     if context_full and confidence > confidence_threshold:
                         signal = predictor.predictor.get_trading_signal(distribution)
                         
-                        if signal != 0 and portfolio.position.quantity == 0:
+                        # Vérifier le temps écoulé depuis le dernier trade
+                        can_trade = True
+                        if last_trade_time:
+                            time_since_last_trade = (current_time - last_trade_time).total_seconds()
+                            if time_since_last_trade < min_time_between_trades:
+                                can_trade = False
+                        
+                        # Vérifier que le signal est fort (très haut ou très bas)
+                        signal_strength = abs(distribution.mean())  # ou une autre mesure de force du signal
+                        min_signal_strength = 0.3  # Seuil minimum pour la force du signal
+                        
+                        if signal != 0 and portfolio.position.quantity == 0 and can_trade and signal_strength > min_signal_strength:
                             side = 'BUY' if signal == 1 else 'SELL'
                             success = portfolio.execute_trade(
                                 current_time, 
@@ -316,13 +329,13 @@ async def run_portfolio_simulation(predictor, duration_seconds=300, confidence_t
                                 confidence
                             )
                             if success:
-                                print(f"\n📈 Trade exécuté - {side} à {current_price:.2f} USDT")
+                                last_trade_time = current_time
+                                print(f"\n📈 Trade exécuté - {side} à {current_price:.2f} USDT (Signal: {signal_strength:.2f}, Conf: {confidence:.1%})")
                     
                     # Affichage en temps réel
                     metrics = portfolio.get_performance_metrics()
                     status = "READY" if context_full else "FILLING"
                     
-                    # Ajout de l'âge de la position dans l'affichage
                     position_age = ""
                     if portfolio.position.quantity != 0 and portfolio.position.open_time:
                         age = (current_time - portfolio.position.open_time).total_seconds()
@@ -338,7 +351,7 @@ async def run_portfolio_simulation(predictor, duration_seconds=300, confidence_t
                           f"Status: {status}", end='')
                 
                 last_price = current_price
-                await asyncio.sleep(0.1)  # Réduit pour plus de précision
+                await asyncio.sleep(0.1)
                 
             except Exception as e:
                 print(f"\nErreur pendant le tick: {str(e)}")
