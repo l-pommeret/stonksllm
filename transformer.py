@@ -102,14 +102,20 @@ class TradingPredictor:
         # Si la probabilité n'est pas assez forte, reste neutre
         if max_prob < threshold:
             return 0
-        
-        # Convertir le token en variation de prix
-        predicted_pct = self.tokenizer.decode(max_prob_token)
-        
-        # Décision basée sur la variation prédite
-        if predicted_pct > 0.1:  # Seuil pour position longue
+            
+        # Cas spéciaux pour les tokens min/max
+        if max_prob_token == self.tokenizer.BELOW_MIN_TOKEN:
+            return -1
+        elif max_prob_token == self.tokenizer.ABOVE_MAX_TOKEN:
             return 1
-        elif predicted_pct < -0.1:  # Seuil pour position courte
+            
+        # Pour les autres tokens, on regarde dans quel bucket ils tombent
+        bucket_start = self.tokenizer.buckets[max_prob_token - 1]  # -1 car les indices commencent à 1
+        
+        # Décision basée sur la valeur du bucket
+        if bucket_start > 0.001:  # Seuil pour position longue
+            return 1
+        elif bucket_start < -0.001:  # Seuil pour position courte
             return -1
         return 0  # Position neutre
 
