@@ -268,7 +268,7 @@ async def run_portfolio_simulation(predictor, duration_seconds=300, confidence_t
         last_price = None
         context_full = False
         last_trade_time = None
-        min_time_between_trades = 5
+        min_time_between_trades = 1
         
         while time.time() - start_time < duration_seconds:
             try:
@@ -292,7 +292,7 @@ async def run_portfolio_simulation(predictor, duration_seconds=300, confidence_t
                     if portfolio.position.quantity != 0:
                         if portfolio.position.open_time:
                             position_age = (current_time - portfolio.position.open_time).total_seconds()
-                            if position_age >= 1:
+                            if position_age >= 5:
                                 portfolio.close_position(current_time, current_price, "TIME_LIMIT")
                                 print(f"\n🕒 Position fermée - Raison: TIME_LIMIT après {position_age:.1f}s")
                                 continue
@@ -433,8 +433,8 @@ async def main():
     await run_portfolio_simulation(
         predictor,
         duration_seconds=300,  
-        confidence_threshold=0.75,
-        min_expected_move=0.02
+        confidence_threshold=0.52,
+        min_expected_move=0.002
     )
 
 if __name__ == "__main__":
